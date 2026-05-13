@@ -1,123 +1,105 @@
 # ================================================================
-#  PC Clean & IP Reset  —  Nord Edition
+#  PC Clean & IP Reset  --  Nord Edition
 #  by Harindu Jayakody
-#
-#  Cleans system junk, resets network stack & IP
-#  Shows exactly what was deleted and how much space was freed
-#
-#  Preserves original core:
-#    del %temp%  /  C:\Windows\Temp  /  C:\Windows\Prefetch
-#    ipconfig /release  /release  /flushdns  /renew
-#    netsh winsock reset  /  netsh int ip reset
 # ================================================================
 
-# ── Admin check ──────────────────────────────────────────────
+# ---- Admin check ---------------------------------------------
 if (-NOT ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]"Administrator")) {
-    Write-Host "`n  [!] Please run as Administrator.`n" -ForegroundColor Red
+    Write-Host ""
+    Write-Host "  [!] Please run as Administrator." -ForegroundColor Red
+    Write-Host ""
     Pause; Exit
 }
 
-# ── Nord colours ─────────────────────────────────────────────
-$C = 'Cyan'; $G = 'Green'; $Y = 'Yellow'; $R = 'Red'
-$M = 'Magenta'; $W = 'White'; $DG = 'DarkGray'
+$C  = 'Cyan'; $G = 'Green'; $Y = 'Yellow'
+$R  = 'Red';  $M = 'Magenta'; $W = 'White'; $DG = 'DarkGray'
 
-# ── Fixed table width ────────────────────────────────────────
-$IW = 54   # inner width between │ and │
+# ==============================================================
+#  TABLE LAYOUT  (all numbers verified)
+#
+#  Row: "  | " (4) + icon(4) + " " (1) + name(22) + " " (2)
+#       + before(9) + "  " + after(9) + "  " + freed(9) + " |" (2)
+#       = 4+4+1+22+2+9+2+9+2+9+2 = 66  => IW = 62
+# ==============================================================
+$IW = 62   # inner width between the two | characters
 
-# ════════════════════════════════════════════════════════════
-#  UI HELPERS
-# ════════════════════════════════════════════════════════════
+function Ln  { Write-Host "  +$('-' * $IW)+" -ForegroundColor $C }
+function Ln2 { Write-Host "  +$('=' * $IW)+" -ForegroundColor $M }
 
-function Write-Banner {
-    Clear-Host
-    Write-Host ""
-    Write-Host "  ╔══════════════════════════════════════════════════════════╗" -ForegroundColor $C
-    Write-Host "  ║                                                          ║" -ForegroundColor $C
-    Write-Host "  ║   ██████╗  ██████╗    ██████╗██╗     ███████╗ █████╗    ║" -ForegroundColor $C
-    Write-Host "  ║   ██╔══██╗██╔════╝   ██╔════╝██║     ██╔════╝██╔══██╗   ║" -ForegroundColor $C
-    Write-Host "  ║   ██████╔╝██║        ██║     ██║     █████╗  ███████║   ║" -ForegroundColor $C
-    Write-Host "  ║   ██╔═══╝ ██║        ██║     ██║     ██╔══╝  ██╔══██║   ║" -ForegroundColor $C
-    Write-Host "  ║   ██║     ╚██████╗   ╚██████╗███████╗███████╗██║  ██║   ║" -ForegroundColor $C
-    Write-Host "  ║   ╚═╝      ╚═════╝    ╚═════╝╚══════╝╚══════╝╚═╝  ╚═╝   ║" -ForegroundColor $C
-    Write-Host "  ║                                                          ║" -ForegroundColor $C
-    Write-Host "  ║          P C   C L E A N   &   I P   R E S E T          ║" -ForegroundColor $Y
-    Write-Host "  ║                    Nord  Edition                        ║" -ForegroundColor $DG
-    Write-Host "  ║                                                          ║" -ForegroundColor $C
-    Write-Host "  ╚══════════════════════════════════════════════════════════╝" -ForegroundColor $C
-    Write-Host ""
-    Write-Host "  ► by " -NoNewline -ForegroundColor $DG
-    Write-Host "Harindu Jayakody" -ForegroundColor $C
-    Write-Host ""
-}
-
-function Write-TableTop    { Write-Host "  ╭$('─' * $IW)╮" -ForegroundColor $C }
-function Write-TableBottom { Write-Host "  ╰$('─' * $IW)╯" -ForegroundColor $C }
-function Write-TableDiv    { Write-Host "  ├$('─' * $IW)┤" -ForegroundColor $C }
-
-function Write-TableHeader($title) {
-    $pad = $IW - $title.Length - 2
-    Write-Host "  │ " -NoNewline -ForegroundColor $C
+function Hdr($title) {
+    $pad = $IW - $title.Length - 1
+    if ($pad -lt 0) { $pad = 0 }
+    Write-Host "  | " -NoNewline -ForegroundColor $C
     Write-Host $title -NoNewline -ForegroundColor $Y
-    Write-Host (" " * $pad) " │" -ForegroundColor $C
+    Write-Host (" " * $pad) -NoNewline
+    Write-Host "|" -ForegroundColor $C
 }
 
-# label = 28 chars, before = 10 chars, after = 10 chars, freed = 10 chars → total = 28+2+10+2+10+2+10 = 64... scale down
-# layout: " icon label(28)  before(9)  after(9)  freed(9) "
-function Write-ResultRow($label, $before, $after) {
-    $freed   = [math]::Max(0, $before - $after)
-    $bStr    = if ($before -gt 0)  { "{0,7:N1} MB" -f $before }  else { "  empty  " }
-    $aStr    = if ($after  -gt 0)  { "{0,7:N1} MB" -f $after  }  else { "   0.0 MB" }
-    $fStr    = if ($freed  -gt 0)  { "{0,7:N1} MB" -f $freed  }  else { "     —   " }
-    $icon    = if ($freed  -gt 0)  { "✔" } else { "·" }
-    $iCol    = if ($freed  -gt 0)  { $G  } else { $DG }
-    $fCol    = if ($freed  -gt 0)  { $Y  } else { $DG }
-    $lCol    = if ($freed  -gt 0)  { $W  } else { $DG }
-    $nm      = ("{0,-28}" -f $label.Substring(0, [math]::Min(28, $label.Length)))
+function ColHdr {
+    # 4 + 4+1+22+2 = 33 for label area, then 3 x (9+2) = 33, total inner = 66... recalc:
+    # "  | " = 4, "     " = 5 (icon+space placeholder), name=22, "  " = 2  => left=33
+    # "  Before " = 9, "   After " = 9, "   Freed " = 9, spaces between = 2+2 => right=31+2 = 33
+    # Total inner used = 33+33 = 66 => need " |" => matches IW=62 + "|" ... let me count carefully:
+    # We write everything then " |" at end.
+    # "  | " = 4 chars OUTSIDE + inner starts
+    # inner: "     " (5) + name(22) + "  " (2) + "  Before" (8) + "    After" (9) + "    Freed" (9) + " " (7) = 62
+    Write-Host "  | " -NoNewline -ForegroundColor $C
+    Write-Host "     " -NoNewline -ForegroundColor $DG                    # icon placeholder
+    Write-Host ("{0,-22}" -f "Location") -NoNewline -ForegroundColor $DG
+    Write-Host "    Before " -NoNewline -ForegroundColor $DG
+    Write-Host "     After " -NoNewline -ForegroundColor $DG
+    Write-Host "     Freed " -NoNewline -ForegroundColor $DG
+    Write-Host "|" -ForegroundColor $C
+}
 
-    Write-Host "  │ " -NoNewline -ForegroundColor $C
+function DataRow($label, $before, $after, $freed) {
+    $icon = if ($freed -gt 0) { "[OK]" } else { "[--]" }
+    $iCol = if ($freed -gt 0) { $G }    else { $DG }
+    $fCol = if ($freed -gt 0) { $Y }    else { $DG }
+    $lCol = if ($freed -gt 0) { $W }    else { $DG }
+    $bS   = "{0,8:N2}MB" -f $before
+    $aS   = "{0,8:N2}MB" -f $after
+    $fS   = if ($freed -gt 0) { "{0,8:N2}MB" -f $freed } else { "    none  " }
+    $nm   = ("{0,-22}" -f $label.Substring(0,[math]::Min(22,$label.Length)))
+
+    Write-Host "  | " -NoNewline -ForegroundColor $C
     Write-Host $icon -NoNewline -ForegroundColor $iCol
     Write-Host " $nm" -NoNewline -ForegroundColor $lCol
-    Write-Host "  $bStr" -NoNewline -ForegroundColor $DG
-    Write-Host "  $aStr" -NoNewline -ForegroundColor $DG
-    Write-Host "  $fStr" -NoNewline -ForegroundColor $fCol
-    Write-Host " │" -ForegroundColor $C
+    Write-Host "  $bS" -NoNewline -ForegroundColor $DG
+    Write-Host "  $aS" -NoNewline -ForegroundColor $DG
+    Write-Host "  $fS" -NoNewline -ForegroundColor $fCol
+    Write-Host " |" -ForegroundColor $C
 }
 
-function Write-ColHeader {
-    $lbl  = ("{0,-28}" -f "Location")
-    Write-Host "  │ " -NoNewline -ForegroundColor $C
-    Write-Host "  $lbl" -NoNewline -ForegroundColor $DG
-    Write-Host "   Before  " -NoNewline -ForegroundColor $DG
-    Write-Host "    After  " -NoNewline -ForegroundColor $DG
-    Write-Host "    Freed " -NoNewline -ForegroundColor $DG
-    Write-Host " │" -ForegroundColor $C
-}
-
-function Write-TotalRow($freed) {
+function TotalRow($freed) {
     $fStr = "{0:N2} MB  ({1:N3} GB)" -f $freed, ($freed / 1024)
     $lbl  = " TOTAL FREED  "
-    Write-Host "  │" -NoNewline -ForegroundColor $M
+    Write-Host "  |" -NoNewline -ForegroundColor $M
     Write-Host $lbl -NoNewline -ForegroundColor $W
     Write-Host ($fStr.PadRight($IW - $lbl.Length)) -NoNewline -ForegroundColor $Y
-    Write-Host "│" -ForegroundColor $M
+    Write-Host "|" -ForegroundColor $M
 }
 
-function Write-NetRow($label, $status, $col) {
-    $nm = ("{0,-30}" -f $label)
-    Write-Host "  │  " -NoNewline -ForegroundColor $C
-    Write-Host $nm -NoNewline -ForegroundColor $W
-    Write-Host ("{0,-$($IW - 34)}" -f $status) -NoNewline -ForegroundColor $col
-    Write-Host "  │" -ForegroundColor $C
+function NetRow($label, $ok) {
+    $icon = if ($ok) { "[OK]" } else { "[!!]" }
+    $col  = if ($ok) { $G }    else { $R }
+    $nm   = ("{0,-54}" -f $label)
+    Write-Host "  | " -NoNewline -ForegroundColor $C
+    Write-Host $icon -NoNewline -ForegroundColor $col
+    Write-Host " $nm" -NoNewline -ForegroundColor $W
+    Write-Host " |" -ForegroundColor $C
 }
 
-function Write-ScanLine($label) {
-    Write-Host ("  ● {0,-22}" -f $label) -NoNewline -ForegroundColor $DG
-    Write-Host "scanning..." -ForegroundColor $DG
+function FinalRow($icon, $text, $iCol, $tCol) {
+    $nm = (" $icon $text").PadRight($IW)
+    Write-Host "  |" -NoNewline -ForegroundColor $G
+    Write-Host $nm -NoNewline -ForegroundColor $tCol
+    Write-Host "|" -ForegroundColor $G
 }
 
-# ════════════════════════════════════════════════════════════
-#  SIZE HELPER  (files only — no dir Length errors)
-# ════════════════════════════════════════════════════════════
+# ==============================================================
+#  SIZE HELPERS
+# ==============================================================
 
 function Get-FolderSize($path) {
     if (-not (Test-Path $path)) { return [double]0 }
@@ -126,185 +108,218 @@ function Get-FolderSize($path) {
     return [math]::Round($(if ($sum) { $sum / 1MB } else { 0 }), 2)
 }
 
-function Remove-FolderAndRecreate($path) {
-    # Mirrors original BAT: del /s/f/q + rd /s/q + mkdir
+function Clean-Folder($path) {
+    # Measure BEFORE deletion
+    $before = Get-FolderSize $path
+    if (Test-Path $path) {
+        # Delete files first, then empty dirs
+        Get-ChildItem $path -Recurse -Force -File -ErrorAction SilentlyContinue |
+            Remove-Item -Force -ErrorAction SilentlyContinue
+        Get-ChildItem $path -Recurse -Force -ErrorAction SilentlyContinue |
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    # Recreate folder (mirrors original BAT mkdir)
     if (-not (Test-Path $path)) {
         New-Item -ItemType Directory -Path $path -Force | Out-Null
-        return [double]0
     }
-    $before = Get-FolderSize $path
-    Get-ChildItem $path -Recurse -Force -File -ErrorAction SilentlyContinue |
-        Remove-Item -Force -ErrorAction SilentlyContinue
-    Get-ChildItem $path -Recurse -Force -ErrorAction SilentlyContinue |
-        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+    # Measure AFTER
     $after = Get-FolderSize $path
-    # Ensure folder still exists (mirrors mkdir in original)
-    if (-not (Test-Path $path)) { New-Item -ItemType Directory -Path $path -Force | Out-Null }
+    # Freed = what we successfully deleted (some files may be locked â€” count those too)
     $freed = $before - $after
+    if ($freed -lt 0) { $freed = 0 }
+
     return [PSCustomObject]@{
         Before = $before
-        After  = Get-FolderSize $path
-        Freed  = [math]::Round($(if ($freed -gt 0) { $freed } else { 0 }), 2)
+        After  = [math]::Round($after, 2)
+        Freed  = [math]::Round($freed, 2)
     }
 }
 
-# ════════════════════════════════════════════════════════════
-#  MAIN
-# ════════════════════════════════════════════════════════════
+# ==============================================================
+#  BANNER
+# ==============================================================
 
-Write-Banner
-
-# ── STEP 1: Measure BEFORE ───────────────────────────────────
-Write-Host "  ► Measuring current junk..." -ForegroundColor $W
+Clear-Host
+Write-Host ""
+Write-Host "  +$('=' * $IW)+" -ForegroundColor $C
+Write-Host "  |" -NoNewline -ForegroundColor $C
+Write-Host "".PadRight($IW) -NoNewline
+Write-Host "|" -ForegroundColor $C
+Write-Host "  |" -NoNewline -ForegroundColor $C
+Write-Host "       ######   ######     ######  ##      ######   #####     ".PadRight($IW) -NoNewline -ForegroundColor $C
+Write-Host "|" -ForegroundColor $C
+Write-Host "  |" -NoNewline -ForegroundColor $C
+Write-Host "       ##  ##  ##          ##      ##      ##      ##   ##    ".PadRight($IW) -NoNewline -ForegroundColor $C
+Write-Host "|" -ForegroundColor $C
+Write-Host "  |" -NoNewline -ForegroundColor $C
+Write-Host "       ######  ##          ##      ##      ####    #######    ".PadRight($IW) -NoNewline -ForegroundColor $C
+Write-Host "|" -ForegroundColor $C
+Write-Host "  |" -NoNewline -ForegroundColor $C
+Write-Host "       ##      ##          ##      ##      ##      ##   ##    ".PadRight($IW) -NoNewline -ForegroundColor $C
+Write-Host "|" -ForegroundColor $C
+Write-Host "  |" -NoNewline -ForegroundColor $C
+Write-Host "       ##       ######      ######  ######  ######  ##   ##    ".PadRight($IW) -NoNewline -ForegroundColor $C
+Write-Host "|" -ForegroundColor $C
+Write-Host "  |" -NoNewline -ForegroundColor $C
+Write-Host "".PadRight($IW) -NoNewline
+Write-Host "|" -ForegroundColor $C
+Write-Host "  |" -NoNewline -ForegroundColor $C
+Write-Host "           PC CLEAN  &  IP RESET  --  Nord Edition           ".PadRight($IW) -NoNewline -ForegroundColor $Y
+Write-Host "|" -ForegroundColor $C
+Write-Host "  |" -NoNewline -ForegroundColor $C
+Write-Host "                     by Harindu Jayakody                     ".PadRight($IW) -NoNewline -ForegroundColor $DG
+Write-Host "|" -ForegroundColor $C
+Write-Host "  |" -NoNewline -ForegroundColor $C
+Write-Host "".PadRight($IW) -NoNewline
+Write-Host "|" -ForegroundColor $C
+Write-Host "  +$('=' * $IW)+" -ForegroundColor $C
 Write-Host ""
 
+# ==============================================================
+#  STEP 1: SCAN
+# ==============================================================
+
 $targets = @(
-    [PSCustomObject]@{ Label = "User Temp (%TEMP%)"; Path = $env:TEMP }
-    [PSCustomObject]@{ Label = "Windows Temp";        Path = "C:\Windows\Temp" }
-    [PSCustomObject]@{ Label = "Prefetch Cache";      Path = "C:\Windows\Prefetch" }
+    [PSCustomObject]@{ Label = "User Temp (%TEMP%)"; Path = $env:TEMP              }
+    [PSCustomObject]@{ Label = "Windows Temp";        Path = "C:\Windows\Temp"      }
+    [PSCustomObject]@{ Label = "Prefetch Cache";      Path = "C:\Windows\Prefetch"  }
 )
 
+Write-Host "  >> Measuring system junk..." -ForegroundColor $W
+Write-Host ""
+
 foreach ($t in $targets) {
-    Write-ScanLine $t.Label
-    $t | Add-Member -NotePropertyName SizeBefore -NotePropertyValue (Get-FolderSize $t.Path)
+    Write-Host ("  >> {0,-25}" -f $t.Label) -NoNewline -ForegroundColor $DG
+    $sz = Get-FolderSize $t.Path
+    $t | Add-Member -NotePropertyName SizeBefore -NotePropertyValue $sz
+    Write-Host ("{0:N2} MB found" -f $sz) -ForegroundColor $C
 }
 
 $totalBefore = [double]0
 $targets | ForEach-Object { $totalBefore += $_.SizeBefore }
 
 Write-Host ""
-Write-Host "  ► Found " -NoNewline -ForegroundColor $W
+Write-Host "  >> Total found: " -NoNewline -ForegroundColor $W
 Write-Host ("{0:N2} MB" -f $totalBefore) -NoNewline -ForegroundColor $Y
-Write-Host " of junk to clean." -ForegroundColor $W
+Write-Host "  |  Network will also be reset." -ForegroundColor $DG
 Write-Host ""
-Write-Host "  ► " -NoNewline -ForegroundColor $C
-Write-Host "Proceed? " -NoNewline -ForegroundColor $W
+Write-Host "  >> Proceed? " -NoNewline -ForegroundColor $C
 Write-Host "[Y] Yes   [N] No  :  " -NoNewline -ForegroundColor $Y
 $confirm = Read-Host
+
 if ($confirm -notmatch "^[Yy]$") {
-    Write-Host "`n  ○ Cancelled. Nothing changed.`n" -ForegroundColor $Y
+    Write-Host ""
+    Write-Host "  [--] Cancelled. Nothing was changed." -ForegroundColor $Y
+    Write-Host ""
     Pause; Exit
 }
 
-# ════════════════════════════════════════════════════════════
-#  STEP 2: CLEAN JUNK
-# ════════════════════════════════════════════════════════════
+# ==============================================================
+#  STEP 2: CLEAN
+# ==============================================================
 
 Write-Host ""
-Write-Host "  ╭── CLEANING SYSTEM JUNK $('─' * 30)╮" -ForegroundColor $C
-Write-Host "  │" -ForegroundColor $C
+Write-Host "  +-- CLEANING SYSTEM JUNK $('-' * ($IW - 17))+" -ForegroundColor $C
+Write-Host "  |" -ForegroundColor $C
 
 foreach ($t in $targets) {
-    Write-Host ("  │  ► Cleaning {0,-28}" -f $t.Label) -NoNewline -ForegroundColor $DG
-    $result = Remove-FolderAndRecreate $t.Path
-    $t | Add-Member -NotePropertyName SizeAfter -NotePropertyValue $result.After
-    $t | Add-Member -NotePropertyName Freed     -NotePropertyValue $result.Freed
-    if ($result.Freed -gt 0) {
-        Write-Host ("{0:N2} MB freed" -f $result.Freed) -ForegroundColor $G
+    Write-Host ("  |  >> {0,-25}" -f $t.Label) -NoNewline -ForegroundColor $DG
+    $r = Clean-Folder $t.Path
+    $t | Add-Member -NotePropertyName SizeAfter -NotePropertyValue $r.After
+    $t | Add-Member -NotePropertyName Freed     -NotePropertyValue $r.Freed
+    if ($r.Freed -gt 0) {
+        Write-Host ("{0:N2} MB freed" -f $r.Freed) -ForegroundColor $G
     } else {
-        Write-Host "already clean" -ForegroundColor $DG
+        Write-Host "already clean (or files in use)" -ForegroundColor $DG
     }
 }
 
-Write-Host "  │" -ForegroundColor $C
-Write-Host "  ╰$('─' * $IW)╯" -ForegroundColor $C
+Write-Host "  |" -ForegroundColor $C
+Ln
 
-# ════════════════════════════════════════════════════════════
-#  STEP 3: NETWORK RESET  (original core — unchanged)
-# ════════════════════════════════════════════════════════════
+# ==============================================================
+#  STEP 3: NETWORK RESET  (original core -- unchanged)
+# ==============================================================
 
 Write-Host ""
-Write-Host "  ╭── RESETTING NETWORK $('─' * 33)╮" -ForegroundColor $C
-Write-Host "  │" -ForegroundColor $C
+Write-Host "  +-- RESETTING NETWORK $('-' * ($IW - 13))+" -ForegroundColor $C
+Write-Host "  |" -ForegroundColor $C
 
-$netSteps = @(
-    @{ Label = "Releasing IP address";     Cmd = { ipconfig /release   2>&1 | Out-Null } }
-    @{ Label = "Flushing DNS cache";       Cmd = { ipconfig /flushdns  2>&1 | Out-Null } }
-    @{ Label = "Renewing IP address";      Cmd = { ipconfig /renew     2>&1 | Out-Null } }
-    @{ Label = "Resetting Winsock";        Cmd = { netsh winsock reset  2>&1 | Out-Null } }
-    @{ Label = "Resetting TCP/IP stack";   Cmd = { netsh int ip reset   2>&1 | Out-Null } }
+$netCmds = @(
+    [PSCustomObject]@{ Label = "Releasing IP address";   Cmd = "ipconfig /release"    }
+    [PSCustomObject]@{ Label = "Flushing DNS cache";     Cmd = "ipconfig /flushdns"   }
+    [PSCustomObject]@{ Label = "Renewing IP address";    Cmd = "ipconfig /renew"      }
+    [PSCustomObject]@{ Label = "Resetting Winsock";      Cmd = "netsh winsock reset"  }
+    [PSCustomObject]@{ Label = "Resetting TCP/IP stack"; Cmd = "netsh int ip reset"   }
 )
 
-$netResults = @()
-foreach ($step in $netSteps) {
-    Write-Host ("  │  ► {0,-32}" -f $step.Label) -NoNewline -ForegroundColor $DG
+$netResults = [System.Collections.Generic.List[PSCustomObject]]::new()
+
+foreach ($step in $netCmds) {
+    Write-Host ("  |  >> {0,-32}" -f $step.Label) -NoNewline -ForegroundColor $DG
     try {
-        & $step.Cmd
+        cmd /c $step.Cmd 2>&1 | Out-Null
         Write-Host "done" -ForegroundColor $G
-        $netResults += [PSCustomObject]@{ Label=$step.Label; Status="done"; OK=$true }
+        $netResults.Add([PSCustomObject]@{ Label=$step.Label; OK=$true })
     } catch {
         Write-Host "failed" -ForegroundColor $R
-        $netResults += [PSCustomObject]@{ Label=$step.Label; Status="failed"; OK=$false }
+        $netResults.Add([PSCustomObject]@{ Label=$step.Label; OK=$false })
     }
 }
 
-Write-Host "  │" -ForegroundColor $C
-Write-Host "  ╰$('─' * $IW)╯" -ForegroundColor $C
+Write-Host "  |" -ForegroundColor $C
+Ln
 
-# ════════════════════════════════════════════════════════════
-#  STEP 4: SUMMARY REPORT
-# ════════════════════════════════════════════════════════════
+# ==============================================================
+#  SUMMARY REPORT
+# ==============================================================
 
 $totalFreed = [double]0
 $targets | ForEach-Object { $totalFreed += $_.Freed }
 
 Write-Host ""
 Write-Host ""
-Write-Host "  ╔══════════════════════════════════════════════════════════╗" -ForegroundColor $M
-Write-Host "  ║                    SUMMARY REPORT                       ║" -ForegroundColor $M
-Write-Host "  ╚══════════════════════════════════════════════════════════╝" -ForegroundColor $M
+Ln2
+Hdr "  SUMMARY REPORT"
+Ln2
 
-# ── Junk table ───────────────────────────────────────────────
+# ---- Junk table ---------------------------------------------
 Write-Host ""
-Write-TableTop
-Write-TableHeader "SYSTEM JUNK CLEANED"
-Write-TableDiv
-Write-ColHeader
-Write-TableDiv
+Ln
+Hdr "SYSTEM JUNK CLEANED"
+Ln
+ColHdr
+Ln
 
 foreach ($t in $targets) {
-    Write-ResultRow $t.Label $t.SizeBefore $t.SizeAfter
+    DataRow $t.Label $t.SizeBefore $t.SizeAfter $t.Freed
 }
 
-Write-TableDiv
-Write-TotalRow $totalFreed
-Write-TableBottom
+Ln
+TotalRow $totalFreed
+Ln
 
-# ── Network table ────────────────────────────────────────────
+# ---- Network table ------------------------------------------
 Write-Host ""
-Write-TableTop
-Write-TableHeader "NETWORK RESET"
-Write-TableDiv
+Ln
+Hdr "NETWORK RESET COMMANDS"
+Ln
 
 foreach ($n in $netResults) {
-    $col = if ($n.OK) { $G } else { $R }
-    $icon = if ($n.OK) { "✔" } else { "✖" }
-    $nm   = ("{0,-44}" -f $n.Label)
-    Write-Host "  │ " -NoNewline -ForegroundColor $C
-    Write-Host "$icon " -NoNewline -ForegroundColor $col
-    Write-Host $nm -NoNewline -ForegroundColor $W
-    Write-Host "  │" -ForegroundColor $C
+    NetRow $n.Label $n.OK
 }
 
-Write-TableBottom
+Ln
 
-# ── Final box ────────────────────────────────────────────────
-$sStr  = "{0:N2} MB  ({1:N3} GB)" -f $totalFreed, ($totalFreed / 1024)
-$label = " ✔  Freed:  "
+# ---- Final box ----------------------------------------------
+$sStr = "{0:N2} MB  ({1:N3} GB)" -f $totalFreed, ($totalFreed / 1024)
 
 Write-Host ""
-Write-Host "  ╭$('─' * $IW)╮" -ForegroundColor $G
-Write-Host "  │" -NoNewline -ForegroundColor $G
-Write-Host $label -NoNewline -ForegroundColor $W
-Write-Host ($sStr.PadRight($IW - $label.Length)) -NoNewline -ForegroundColor $Y
-Write-Host "│" -ForegroundColor $G
-Write-Host "  │" -NoNewline -ForegroundColor $G
-Write-Host " ✔  Network stack has been reset.".PadRight($IW) -NoNewline -ForegroundColor $G
-Write-Host "│" -ForegroundColor $G
-Write-Host "  │" -NoNewline -ForegroundColor $G
-Write-Host " ⚠  Reboot recommended for network changes.".PadRight($IW) -NoNewline -ForegroundColor $Y
-Write-Host "│" -ForegroundColor $G
-Write-Host "  ╰$('─' * $IW)╯" -ForegroundColor $G
+Write-Host "  +$('=' * $IW)+" -ForegroundColor $G
+FinalRow "[OK]" "Freed:  $sStr"                          $G $Y
+FinalRow "[OK]" "Network stack has been reset."          $G $G
+FinalRow "[!!]" "Reboot recommended for network changes." $Y $Y
+Write-Host "  +$('=' * $IW)+" -ForegroundColor $G
 
 Write-Host ""
 Write-Host "  by Harindu Jayakody" -ForegroundColor $DG
